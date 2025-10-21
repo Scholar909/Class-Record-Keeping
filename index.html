@@ -1,0 +1,373 @@
+<!DOCTYPE html><html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Smart Table Tracker</title>
+<style>
+:root{--accent:#2563eb;--bg:#f8fafc}
+body {
+  font-family: system-ui, sans-serif;
+  margin: 0;
+  padding: 1rem;
+  background: var(--bg);
+  color: #111;
+}
+h1 {
+  font-size: 1.1rem;
+  margin-bottom: .5rem;
+  text-align: center;
+}
+.toolbar {
+  display: flex;
+  gap: .5rem;
+  justify-content: center;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+.toolbar button {
+  padding: .45rem .8rem;
+  border: none;
+  background: var(--accent);
+  color: white;
+  border-radius: .4rem;
+  font-size: .9rem;
+}
+.toolbar button.secondary{ background:#64748b }
+.toolbar button:active{ transform: translateY(1px) }
+input[type="text"] {
+  padding: .5rem;
+  width: 100%;
+  border-radius: .4rem;
+  border: 1px solid #ccc;
+  margin-bottom: 1rem;
+  box-sizing: border-box;
+}
+.table-wrap{
+  background: white;
+  border-radius: .5rem;
+  padding: .25rem;
+  box-shadow: 0 6px 18px rgba(2,6,23,0.06);
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 640px;
+}
+th, td {
+  border: 1px solid #e6e6e6;
+  padding: .55rem;
+  text-align: center;
+  min-width: 96px;
+  box-sizing: border-box;
+}
+th:first-child, td:first-child{ min-width: 64px }
+th {
+  background: #f1f5f9;
+  font-weight: 600;
+  position: relative;
+}
+td[contenteditable="true"]:focus { outline: 2px solid var(--accent); background: #eff6ff; }
+
+.check-cell{ cursor:pointer; user-select:none }
+.checked{ color: green; font-weight: 700 }
+
+@media (max-width:480px){
+  .toolbar{ padding:0 6px }
+  th,td{ padding:.45rem; min-width:120px }
+}
+
+.menu {
+  position: fixed;
+  display: none;
+  gap:.4rem;
+  background: white;
+  border: 1px solid #ddd;
+  box-shadow: 0 6px 18px rgba(2,6,23,0.08);
+  padding:.4rem;
+  border-radius:.4rem;
+  z-index:9999;
+}
+.menu button{
+  background:transparent;
+  color:var(--accent);
+  border:none;
+  padding:.35rem .5rem;
+  border-radius:.3rem
+}
+
+/* highlight styles */
+.highlight-row td { background: #dbeafe !important; }
+.highlight-col { background: #dbeafe !important; }
+
+th, td:first-child {
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+}
+
+th {
+  cursor: pointer;
+  touch-action: manipulation; /* Helps prevent default gestures on mobile */
+}
+</style>
+</head>
+<body>
+<h1>📋 Record Tracker</h1>
+<div class="toolbar">
+  <button id="addRow">+ Row</button>
+  <button id="addCol">+ Column</button>
+  <button id="downloadBtn" class="secondary">Download CSV</button>
+</div>
+<input type="text" id="search" placeholder="Search...">
+<div class="table-wrap" id="tableWrap">
+  <table id="table" aria-label="Record table">
+    <thead>
+      <tr id="header">
+        <th>Serial No.</th>
+      </tr>
+    </thead>
+    <tbody id="body"></tbody>
+  </table>
+</div>
+<div class="menu" id="menu">
+  <button id="menuDelete">Delete</button>
+  <button id="menuEdit" style="display:none;">Edit</button>
+  <button id="menuCopy">Copy</button>
+  <button id="menuCancel">Cancel</button>
+</div>
+
+<script>
+const table = document.getElementById('table');
+const header = document.getElementById('header');
+const body = document.getElementById('body');
+const addRowBtn = document.getElementById('addRow');
+const addColBtn = document.getElementById('addCol');
+const searchInput = document.getElementById('search');
+const downloadBtn = document.getElementById('downloadBtn');
+const menu = document.getElementById('menu');
+const menuDelete = document.getElementById('menuDelete');
+const menuEdit = document.getElementById('menuEdit');
+const menuCopy = document.getElementById('menuCopy');
+const menuCancel = document.getElementById('menuCancel');
+let colCount = 0;
+let rowCount = 0;
+let longPressTarget = null;
+let pressTimer = null;
+const LONG_PRESS_MS = 2000;
+const STORAGE_KEY = 'smartTable';
+
+function loadTable(){
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if(saved){
+    try{
+      const { headerNames, data } = JSON.parse(saved);
+      header.innerHTML = '<th>Serial No.</th>';
+      headerNames.forEach(name => {
+        const th = document.createElement('th');
+        th.textContent = name; // not editable directly now
+        header.appendChild(th);
+      });
+      body.innerHTML = '';
+      data.forEach((row, i) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${i + 1}</td>` +
+          row.map(cell => `<td contenteditable="true">${cell}</td>`).join('');
+        body.appendChild(tr);
+      });
+      colCount = header.children.length - 1;
+      rowCount = body.children.length;
+    }catch(e){ console.error('Failed to parse saved table', e); }
+  }
+}
+
+function saveTable(){
+  const headerNames = Array.from(header.children).slice(1).map(th => th.textContent);
+  const data = Array.from(body.children).map(tr => Array.from(tr.children).slice(1).map(td => td.textContent));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ headerNames, data }));
+}
+
+function addColumn(){
+  colCount++;
+  const th = document.createElement('th');
+  th.textContent = 'Column ' + colCount;
+  header.appendChild(th);
+  Array.from(body.children).forEach(tr => {
+    const td = document.createElement('td');
+    td.contentEditable = true;
+    tr.appendChild(td);
+  });
+  saveTable();
+}
+
+function addRow(){
+  rowCount++;
+  const tr = document.createElement('tr');
+  const cells = Array.from({length: colCount}).map(()=>`<td contenteditable="true"></td>`).join('');
+  tr.innerHTML = `<td>${rowCount}</td>` + cells;
+  body.appendChild(tr);
+  saveTable();
+}
+
+function reindexRows(){
+  Array.from(body.children).forEach((tr, idx)=>{
+    tr.children[0].textContent = idx + 1;
+  });
+  rowCount = body.children.length;
+}
+
+searchInput.addEventListener('input', ()=>{
+  const val = searchInput.value.toLowerCase();
+  Array.from(body.children).forEach(row=>{
+    const match = row.textContent.toLowerCase().includes(val);
+    row.style.display = match ? '' : 'none';
+  });
+});
+
+function downloadCSV(){
+  const headerNames = ['Serial No.'].concat(Array.from(header.children).slice(1).map(th=>th.textContent));
+  const rows = Array.from(body.children).map((tr, i)=>{
+    return [String(i+1)].concat(Array.from(tr.children).slice(1).map(td=>td.textContent));
+  });
+  const all = [headerNames].concat(rows);
+  const csv = all.map(r=>r.map(cell=>`"${String(cell).replace(/"/g,'""')}"`).join(',')).join('\r\n');
+  const blob = new Blob(["\uFEFF" + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'smart-table.csv';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+downloadBtn.addEventListener('click', downloadCSV);
+addRowBtn.addEventListener('click', addRow);
+addColBtn.addEventListener('click', addColumn);
+table.addEventListener('input', saveTable);
+
+function showMenuAt(x, y) {
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+  menu.style.display = 'flex';
+
+  // ✅ Only show Edit for editable headers
+  if (longPressTarget && longPressTarget.tagName === 'TH' && longPressTarget.cellIndex > 0) {
+    menuEdit.style.display = 'inline-block';
+  } else {
+    menuEdit.style.display = 'none';
+  }
+}
+
+function hideMenu(){
+  menu.style.display = 'none';
+  longPressTarget = null;
+  clearHighlights();
+}
+
+function clearHighlights(){
+  body.querySelectorAll('.highlight-row').forEach(tr=>tr.classList.remove('highlight-row'));
+  header.querySelectorAll('.highlight-col').forEach(th=>th.classList.remove('highlight-col'));
+  Array.from(body.querySelectorAll('td')).forEach(td=>td.classList.remove('highlight-col'));
+}
+
+function highlightTarget(target){
+  clearHighlights();
+  if(target.tagName === 'TH'){
+    const idx = Array.from(header.children).indexOf(target);
+    if(idx >= 0){
+      target.classList.add('highlight-col');
+      Array.from(body.children).forEach(tr=>{
+        if(tr.children[idx]) tr.children[idx].classList.add('highlight-col');
+      });
+    }
+  } else if(target.tagName === 'TD' && target.cellIndex === 0){
+    target.parentElement.classList.add('highlight-row');
+  }
+}
+
+function handleDeleteTarget(target){
+  if(!target) return;
+  if(target.tagName === 'TH'){
+    const idx = Array.from(header.children).indexOf(target);
+    if(idx > 0){
+      header.removeChild(target);
+      Array.from(body.children).forEach(tr => tr.removeChild(tr.children[idx]));
+      colCount = Math.max(0, header.children.length - 1);
+      saveTable();
+    }
+  } else if(target.tagName === 'TD' && target.cellIndex === 0){
+    const row = target.parentElement;
+    if(body.contains(row)){
+      body.removeChild(row);
+      reindexRows();
+      saveTable();
+    }
+  }
+}
+
+function handleEditTarget(target){
+  if(!target || target.tagName !== 'TH' || target.cellIndex === 0) return;
+  const newName = prompt('Enter new column name:', target.textContent.trim());
+  if(newName !== null && newName.trim() !== ''){
+    target.textContent = newName.trim();
+    saveTable();
+  }
+}
+
+function handleCopyTarget(target){
+  if(!target) return;
+  const text = target.textContent || '';
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(()=> alert('Copied!'))
+    .catch(()=> alert('Copy failed'));
+  } else {
+    prompt('Copy text (select and copy):', text);
+  }
+}
+
+function startPressTimer(target, clientX, clientY){
+  clearTimeout(pressTimer);
+  longPressTarget = target;
+  pressTimer = setTimeout(()=>{
+    highlightTarget(target);
+    showMenuAt(clientX + 6, clientY + 6);
+  }, LONG_PRESS_MS);
+}
+function clearPressTimer(){ clearTimeout(pressTimer); }
+
+table.addEventListener('touchstart', e=>{
+  const t = e.target;
+  if(!(t.tagName === 'TH' || (t.tagName === 'TD' && t.cellIndex === 0))) return;
+  const touch = e.touches[0];
+  startPressTimer(t, touch.clientX, touch.clientY);
+});
+['touchend','touchcancel'].forEach(evt=> table.addEventListener(evt, ()=> clearPressTimer()));
+
+table.addEventListener('mousedown', e=>{
+  const t = e.target;
+  if(!(t.tagName === 'TH' || (t.tagName === 'TD' && t.cellIndex === 0))) return;
+  startPressTimer(t, e.clientX, e.clientY);
+});
+['mouseup','mouseleave'].forEach(evt=> table.addEventListener(evt, ()=> clearPressTimer()));
+
+menuDelete.addEventListener('click', ()=>{ handleDeleteTarget(longPressTarget); hideMenu(); });
+menuEdit.addEventListener('click', ()=>{ handleEditTarget(longPressTarget); hideMenu(); });
+menuCopy.addEventListener('click', ()=>{ handleCopyTarget(longPressTarget); hideMenu(); });
+menuCancel.addEventListener('click', ()=>{ hideMenu(); });
+
+['touchstart', 'mousedown'].forEach(evt => {
+  document.addEventListener(evt, e => {
+    // ✅ Only hide menu if clicking *outside* both the menu and table
+    if (!menu.contains(e.target) && !table.contains(e.target)) {
+      hideMenu();
+    }
+  });
+});
+
+loadTable();
+</script>
+</body>
+</html>
