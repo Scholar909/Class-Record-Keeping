@@ -1,4 +1,5 @@
-<!DOCTYPE html><html lang="en">
+<!DOCTYPE html>
+<html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -31,6 +32,7 @@ h1 {
   color: white;
   border-radius: .4rem;
   font-size: .9rem;
+  cursor: pointer;
 }
 .toolbar button.secondary{ background:#64748b }
 .toolbar button:active{ transform: translateY(1px) }
@@ -94,7 +96,8 @@ td[contenteditable="true"]:focus { outline: 2px solid var(--accent); background:
   color:var(--accent);
   border:none;
   padding:.35rem .5rem;
-  border-radius:.3rem
+  border-radius:.3rem;
+  cursor:pointer;
 }
 
 /* highlight styles */
@@ -110,8 +113,31 @@ th, td:first-child {
 
 th {
   cursor: pointer;
-  touch-action: manipulation; /* Helps prevent default gestures on mobile */
+  touch-action: manipulation;
 }
+
+.extra-tools {
+  display:flex;
+  gap:.4rem;
+  justify-content:center;
+  flex-wrap:wrap;
+  margin-bottom:1rem;
+}
+.extra-tools input {
+  padding:.45rem;
+  border-radius:.4rem;
+  border:1px solid #ccc;
+  min-width:200px;
+}
+.extra-tools button {
+  padding:.45rem .8rem;
+  border:none;
+  background:var(--accent);
+  color:white;
+  border-radius:.4rem;
+  font-size:.9rem;
+}
+.extra-tools button.secondary { background:#64748b }
 </style>
 </head>
 <body>
@@ -120,8 +146,19 @@ th {
   <button id="addRow">+ Row</button>
   <button id="addCol">+ Column</button>
   <button id="downloadBtn" class="secondary">Download CSV</button>
+  <button id="copyAllBtn">Copy All</button>
+  <button id="deleteAllBtn" class="secondary">Delete All</button>
+  <button id="undoBtn" class="secondary">Undo</button>
+  <button id="redoBtn" class="secondary">Redo</button>
 </div>
+
+<div class="extra-tools">
+  <input type="text" id="pasteInput" placeholder="Paste data string here...">
+  <button id="pasteBtn">Paste</button>
+</div>
+
 <input type="text" id="search" placeholder="Search...">
+
 <div class="table-wrap" id="tableWrap">
   <table id="table" aria-label="Record table">
     <thead>
@@ -132,6 +169,7 @@ th {
     <tbody id="body"></tbody>
   </table>
 </div>
+
 <div class="menu" id="menu">
   <button id="menuDelete">Delete</button>
   <button id="menuEdit" style="display:none;">Edit</button>
@@ -147,6 +185,12 @@ const addRowBtn = document.getElementById('addRow');
 const addColBtn = document.getElementById('addCol');
 const searchInput = document.getElementById('search');
 const downloadBtn = document.getElementById('downloadBtn');
+const copyAllBtn = document.getElementById('copyAllBtn');
+const deleteAllBtn = document.getElementById('deleteAllBtn');
+const pasteInput = document.getElementById('pasteInput');
+const pasteBtn = document.getElementById('pasteBtn');
+const undoBtn = document.getElementById('undoBtn');
+const redoBtn = document.getElementById('redoBtn');
 const menu = document.getElementById('menu');
 const menuDelete = document.getElementById('menuDelete');
 const menuEdit = document.getElementById('menuEdit');
@@ -158,6 +202,37 @@ let longPressTarget = null;
 let pressTimer = null;
 const LONG_PRESS_MS = 2000;
 const STORAGE_KEY = 'smartTable';
+const MAX_HISTORY = 30;
+
+let historyStack = [];
+let redoStack = [];
+
+function pushHistory() {
+  const current = localStorage.getItem(STORAGE_KEY);
+  if (current) {
+    historyStack.push(current);
+    if (historyStack.length > MAX_HISTORY) historyStack.shift();
+    redoStack = []; // clear redo after new change
+  }
+}
+
+function undo() {
+  if (historyStack.length === 0) return;
+  const last = historyStack.pop();
+  const current = localStorage.getItem(STORAGE_KEY);
+  redoStack.push(current);
+  localStorage.setItem(STORAGE_KEY, last);
+  loadTable();
+}
+
+function redo() {
+  if (redoStack.length === 0) return;
+  const next = redoStack.pop();
+  const current = localStorage.getItem(STORAGE_KEY);
+  historyStack.push(current);
+  localStorage.setItem(STORAGE_KEY, next);
+  loadTable();
+}
 
 function loadTable(){
   const saved = localStorage.getItem(STORAGE_KEY);
@@ -167,7 +242,7 @@ function loadTable(){
       header.innerHTML = '<th>Serial No.</th>';
       headerNames.forEach(name => {
         const th = document.createElement('th');
-        th.textContent = name; // not editable directly now
+        th.textContent = name;
         header.appendChild(th);
       });
       body.innerHTML = '';
@@ -180,16 +255,23 @@ function loadTable(){
       colCount = header.children.length - 1;
       rowCount = body.children.length;
     }catch(e){ console.error('Failed to parse saved table', e); }
+  } else {
+    header.innerHTML = '<th>Serial No.</th>';
+    body.innerHTML = '';
+    colCount = 0;
+    rowCount = 0;
   }
 }
 
 function saveTable(){
+  pushHistory();
   const headerNames = Array.from(header.children).slice(1).map(th => th.textContent);
   const data = Array.from(body.children).map(tr => Array.from(tr.children).slice(1).map(td => td.textContent));
   localStorage.setItem(STORAGE_KEY, JSON.stringify({ headerNames, data }));
 }
 
 function addColumn(){
+  pushHistory();
   colCount++;
   const th = document.createElement('th');
   th.textContent = 'Column ' + colCount;
@@ -203,6 +285,7 @@ function addColumn(){
 }
 
 function addRow(){
+  pushHistory();
   rowCount++;
   const tr = document.createElement('tr');
   const cells = Array.from({length: colCount}).map(()=>`<td contenteditable="true"></td>`).join('');
@@ -243,17 +326,51 @@ function downloadCSV(){
   a.remove();
   URL.revokeObjectURL(url);
 }
+
 downloadBtn.addEventListener('click', downloadCSV);
 addRowBtn.addEventListener('click', addRow);
 addColBtn.addEventListener('click', addColumn);
 table.addEventListener('input', saveTable);
 
+// Copy all as encoded string
+copyAllBtn.addEventListener('click', ()=>{
+  const content = localStorage.getItem(STORAGE_KEY);
+  if(!content) return alert('No data to copy!');
+  const encoded = btoa(unescape(encodeURIComponent(content)));
+  navigator.clipboard.writeText(encoded).then(()=>alert('Copied all data!')).catch(()=>alert('Copy failed'));
+});
+
+// Paste from encoded string
+pasteBtn.addEventListener('click', ()=>{
+  const val = pasteInput.value.trim();
+  if(!val) return alert('Nothing to paste!');
+  try{
+    const decoded = decodeURIComponent(escape(atob(val)));
+    localStorage.setItem(STORAGE_KEY, decoded);
+    loadTable();
+    alert('Data pasted successfully!');
+  }catch(e){
+    alert('Invalid data format!');
+  }
+});
+
+// Delete all
+deleteAllBtn.addEventListener('click', ()=>{
+  if(confirm('This will clear all data permanently. Continue?')){
+    pushHistory();
+    localStorage.removeItem(STORAGE_KEY);
+    loadTable();
+  }
+});
+
+undoBtn.addEventListener('click', undo);
+redoBtn.addEventListener('click', redo);
+
+// === Long press menu and highlight logic ===
 function showMenuAt(x, y) {
   menu.style.left = x + 'px';
   menu.style.top = y + 'px';
   menu.style.display = 'flex';
-
-  // ✅ Only show Edit for editable headers
   if (longPressTarget && longPressTarget.tagName === 'TH' && longPressTarget.cellIndex > 0) {
     menuEdit.style.display = 'inline-block';
   } else {
@@ -290,6 +407,7 @@ function highlightTarget(target){
 
 function handleDeleteTarget(target){
   if(!target) return;
+  pushHistory();
   if(target.tagName === 'TH'){
     const idx = Array.from(header.children).indexOf(target);
     if(idx > 0){
@@ -312,6 +430,7 @@ function handleEditTarget(target){
   if(!target || target.tagName !== 'TH' || target.cellIndex === 0) return;
   const newName = prompt('Enter new column name:', target.textContent.trim());
   if(newName !== null && newName.trim() !== ''){
+    pushHistory();
     target.textContent = newName.trim();
     saveTable();
   }
@@ -360,7 +479,6 @@ menuCancel.addEventListener('click', ()=>{ hideMenu(); });
 
 ['touchstart', 'mousedown'].forEach(evt => {
   document.addEventListener(evt, e => {
-    // ✅ Only hide menu if clicking *outside* both the menu and table
     if (!menu.contains(e.target) && !table.contains(e.target)) {
       hideMenu();
     }
